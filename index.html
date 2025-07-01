@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orienteering App</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet.js for maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <!-- Custom Styles -->
+    <style>
+        /* Ensure the map container has a defined height */
+        #map { 
+            height: 100%; 
+            width: 100%;
+            cursor: crosshair;
+        }
+        /* Custom modal styles */
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            z-index: 40;
+        }
+        .modal-content {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 50;
+        }
+        /* Custom icons for checkpoints */
+        .checkpoint-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans flex flex-col md:flex-row h-screen overflow-hidden">
+
+    <!-- Left Panel: Controls and Information -->
+    <div class="w-full md:w-1/3 lg:w-1/4 p-4 bg-white shadow-lg overflow-y-auto flex flex-col">
+        <h1 class="text-3xl font-bold text-gray-800 mb-1">Orienteering App</h1>
+        <p class="text-xs text-gray-500 mb-4">Create a course or run an existing one.</p>
+
+        <!-- User ID Display -->
+        <div class="mb-4 p-2 bg-gray-100 rounded-md">
+            <label class="text-xs font-semibold text-gray-600">Your User ID (for sharing courses):</label>
+            <p id="userIdDisplay" class="text-xs text-gray-800 break-all">Initializing...</p>
+        </div>
+
+        <!-- Mode Switching Buttons -->
+        <div id="modeSelection" class="space-y-2 mb-4">
+            <button id="createModeBtn" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Create New Course</button>
+            <button id="runModeBtn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Run a Course</button>
+        </div>
+
+        <!-- Status Display -->
+        <div id="statusPanel" class="mb-4 p-3 bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 rounded-md hidden">
+            <p id="statusText" class="font-semibold"></p>
+            <p id="statusSubText" class="text-sm"></p>
+        </div>
+
+        <!-- Checkpoint List -->
+        <div class="flex-grow">
+            <h2 id="checkpointListTitle" class="text-xl font-bold text-gray-700 mb-2"></h2>
+            <ul id="checkpointList" class="space-y-2">
+                <!-- Checkpoints will be dynamically added here -->
+            </ul>
+        </div>
+        
+        <!-- Action Buttons at the bottom -->
+        <div id="actionButtons" class="mt-4 space-y-2"></div>
+    </div>
+
+    <!-- Right Panel: Map -->
+    <div id="mapContainer" class="w-full md:w-2/3 lg:w-3/4 h-full">
+        <div id="map"></div>
+    </div>
+
+    <!-- Modal for Course Name Input -->
+    <div id="courseNameModal" class="modal-backdrop hidden justify-center items-center">
+        <div class="modal-content bg-white p-6 rounded-lg shadow-xl w-11/12 md:w-1/3">
+            <h2 class="text-2xl font-bold mb-4">Save Course</h2>
+            <p class="mb-4">Enter a name for your new orienteering course.</p>
+            <input type="text" id="courseNameInput" placeholder="e.g., 'Park Loop Challenge'" class="w-full p-2 border border-gray-300 rounded-md mb-4">
+            <div class="flex justify-end space-x-2">
+                <button id="cancelSaveBtn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg">Cancel</button>
+                <button id="confirmSaveBtn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Loading a Course -->
+    <div id="loadCourseModal" class="modal-backdrop hidden justify-center items-center">
+        <div class="modal-content bg-white p-6 rounded-lg shadow-xl w-11/12 md:w-1/3 max-h-[80vh] flex flex-col">
+            <h2 class="text-2xl font-bold mb-4">Load a Course</h2>
+            <div id="courseListContainer" class="flex-grow overflow-y-auto mb-4 border-t border-b py-2">
+                <p>Loading available courses...</p>
+            </div>
+            <div class="flex justify-end">
+                 <button id="cancelLoadBtn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, setLogLevel, collection, addDoc, getDocs, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL VARIABLES & CONFIG ---
+        const CHECK_IN_DISTANCE_METERS = 25; // How close user must be to check in
+
+        // Firebase configuration (provided by the environment)
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-orienteering-app';
+
+        // App state
+        let db, auth, userId;
+        let map;
+        let userMarker;
+        let isCreatingMode = false;
+        let newCheckpoints = [];
+        let checkpointMarkers = [];
+        let activeCourseRun = null;
+        let nextCheckpointIndex = 0;
+        let watchId = null;
+
+        // DOM Elements
+        const createModeBtn = document.getElementById('createModeBtn');
+        const runModeBtn = document.getElementById('runModeBtn');
+        const statusPanel = document.getElementById('statusPanel');
+        const statusText = document.getElementById('statusText');
+        const statusSubText = document.getElementById('statusSubText');
+        const checkpointListTitle = document.getElementById('checkpointListTitle');
+        const checkpointList = document.getElementById('checkpointList');
+        const actionButtons = document.getElementById('actionButtons');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        
+        // Modals
+        const courseNameModal = document.getElementById('courseNameModal');
+        const courseNameInput = document.getElementById('courseNameInput');
+        const confirmSaveBtn = document.getElementById('confirmSaveBtn');
+        const cancelSaveBtn = document.getElementById('cancelSaveBtn');
+        const loadCourseModal = document.getElementById('loadCourseModal');
+        const cancelLoadBtn = document.getElementById('cancelLoadBtn');
+        const courseListContainer = document.getElementById('courseListContainer');
+
+
+        // --- INITIALIZATION ---
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if (Object.keys(firebaseConfig).length === 0) {
+                showStatus("Error", "Firebase configuration is missing. The app cannot connect to the database.", "error");
+                return;
+            }
+            initializeApp(firebaseConfig);
+            auth = getAuth();
+            db = getFirestore();
+            setLogLevel('debug'); // For development
+            
+            handleAuthentication();
+            initMapWithUserLocation();
+
+            // Setup button event listeners
+            createModeBtn.addEventListener('click', enterCreateMode);
+            runModeBtn.addEventListener('click', showLoadCourseModal);
+            cancelSaveBtn.addEventListener('click', () => courseNameModal.classList.add('hidden'));
+            cancelLoadBtn.addEventListener('click', () => loadCourseModal.classList.add('hidden'));
+        });
+
+        function handleAuthentication() {
+            onAuthStateChanged(auth, user => {
+                if (user) {
+                    userId = user.uid;
+                    userIdDisplay.textContent = userId;
+                    console.log("Authenticated with User ID:", userId);
+                } else {
+                    signInAnonymously(auth).catch(error => {
+                        console.error("Anonymous sign-in failed:", error);
+                        showStatus("Authentication Failed", "Could not connect to the service.", "error");
+                    });
+                }
+            });
+        }
+
+        function initMapWithUserLocation() {
+            if (!navigator.geolocation) {
+                showStatus("Geolocation Error", "Your browser does not support geolocation.", "error");
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(position => {
+                const { latitude, longitude } = position.coords;
+                setupMap([latitude, longitude]);
+            }, () => {
+                showStatus("Geolocation Error", "Could not get your location. Please allow location access.", "error");
+                // Default to a fallback location (e.g., Bray, Ireland)
+                setupMap([53.2034, -6.1095]);
+            });
+        }
+
+        function setupMap(centerCoords) {
+            map = L.map('map').setView(centerCoords, 15);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // User's location marker
+            const userIcon = L.divIcon({
+                html: `<div class="w-4 h-4 bg-blue-500 rounded-full border-2 border-white"></div>`,
+                className: '',
+                iconSize: [16, 16],
+                iconAnchor: [8, 8]
+            });
+            userMarker = L.marker(centerCoords, { icon: userIcon }).addTo(map)
+                .bindPopup('Your Location').openPopup();
+
+            // Map click listener for creating checkpoints
+            map.on('click', onMapClick);
+        }
+
+
+        // --- CORE LOGIC & MODES ---
+
+        function resetUI() {
+            isCreatingMode = false;
+            newCheckpoints = [];
+            activeCourseRun = null;
+            nextCheckpointIndex = 0;
+            
+            // Stop location tracking if it's running
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+            
+            clearAllMarkers();
+            checkpointList.innerHTML = '';
+            checkpointListTitle.textContent = '';
+            actionButtons.innerHTML = '';
+            statusPanel.classList.add('hidden');
+            document.getElementById('modeSelection').classList.remove('hidden');
+        }
+
+        function enterCreateMode() {
+            resetUI();
+            isCreatingMode = true;
+            document.getElementById('modeSelection').classList.add('hidden');
+            showStatus("Create Mode", "Click on the map to add checkpoints.");
+            checkpointListTitle.textContent = "New Checkpoints";
+            updateCheckpointListView();
+            
+            actionButtons.innerHTML = `
+                <button id="saveCourseBtn" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg disabled:opacity-50" disabled>Save Course</button>
+                <button id="cancelCreateBtn" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg">Cancel</button>
+            `;
+            document.getElementById('saveCourseBtn').addEventListener('click', () => {
+                if (newCheckpoints.length > 0) {
+                    courseNameModal.classList.remove('hidden');
+                    courseNameInput.value = '';
+                    courseNameInput.focus();
+                }
+            });
+            document.getElementById('cancelCreateBtn').addEventListener('click', resetUI);
+            confirmSaveBtn.onclick = saveCourse; // Use .onclick to easily re-assign
+        }
+
+        function onMapClick(e) {
+            if (!isCreatingMode) return;
+            const checkpoint = {
+                lat: e.latlng.lat,
+                lng: e.latlng.lng,
+                name: `Checkpoint ${newCheckpoints.length + 1}`
+            };
+            newCheckpoints.push(checkpoint);
+            addCheckpointMarker(checkpoint, newCheckpoints.length);
+            updateCheckpointListView();
+            document.getElementById('saveCourseBtn').disabled = false;
+        }
+        
+        async function saveCourse() {
+            if (!userId) {
+                showStatus("Error", "Cannot save course. No user identified.", "error");
+                return;
+            }
+            const courseName = courseNameInput.value.trim();
+            if (courseName === "") {
+                alert("Please enter a course name."); // Simple validation
+                return;
+            }
+            
+            const courseData = {
+                name: courseName,
+                creatorId: userId,
+                createdAt: new Date(),
+                checkpoints: newCheckpoints
+            };
+
+            try {
+                const docRef = await addDoc(collection(db, `artifacts/${appId}/public/data/orienteeringCourses`), courseData);
+                console.log("Course saved with ID: ", docRef.id);
+                showStatus("Success!", `Course "${courseName}" has been saved.`, "success");
+                courseNameModal.classList.add('hidden');
+                resetUI();
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                showStatus("Save Failed", "There was an error saving the course to the database.", "error");
+            }
+        }
+
+        async function showLoadCourseModal() {
+            resetUI();
+            loadCourseModal.classList.remove('hidden');
+            courseListContainer.innerHTML = '<p class="text-gray-500">Fetching courses...</p>';
+
+            try {
+                const querySnapshot = await getDocs(collection(db, `artifacts/${appId}/public/data/orienteeringCourses`));
+                if (querySnapshot.empty) {
+                    courseListContainer.innerHTML = '<p class="text-red-500">No courses found.</p>';
+                    return;
+                }
+                
+                let coursesHtml = '<ul class="space-y-2">';
+                querySnapshot.forEach(doc => {
+                    const course = doc.data();
+                    coursesHtml += `
+                        <li class="p-3 border rounded-lg hover:bg-gray-100 cursor-pointer" data-course-id="${doc.id}">
+                            <p class="font-bold">${course.name}</p>
+                            <p class="text-sm text-gray-600">${course.checkpoints.length} checkpoints</p>
+                            <p class="text-xs text-gray-400">Creator ID: ${course.creatorId.substring(0, 10)}...</p>
+                        </li>
+                    `;
+                });
+                coursesHtml += '</ul>';
+                courseListContainer.innerHTML = coursesHtml;
+
+                // Add event listeners to the new list items
+                courseListContainer.querySelectorAll('li').forEach(item => {
+                    item.addEventListener('click', () => {
+                        loadAndStartCourse(item.dataset.courseId);
+                        loadCourseModal.classList.add('hidden');
+                    });
+                });
+
+            } catch (error) {
+                console.error("Error fetching courses: ", error);
+                courseListContainer.innerHTML = '<p class="text-red-500">Failed to load courses.</p>';
+            }
+        }
+
+        function loadAndStartCourse(courseId) {
+            const courseDocRef = doc(db, `artifacts/${appId}/public/data/orienteeringCourses`, courseId);
+            
+            // Use onSnapshot to get real-time data, though getDoc would also work here.
+            onSnapshot(courseDocRef, (doc) => {
+                if (doc.exists()) {
+                    activeCourseRun = { id: doc.id, ...doc.data() };
+                    startCourseRun();
+                } else {
+                    showStatus("Error", "Course not found.", "error");
+                }
+            }, (error) => {
+                console.error("Error loading course:", error);
+                showStatus("Error", "Failed to load the selected course.", "error");
+            });
+        }
+
+        function startCourseRun() {
+            resetUI();
+            document.getElementById('modeSelection').classList.add('hidden');
+            nextCheckpointIndex = 0;
+
+            // Display all checkpoint markers for the course
+            activeCourseRun.checkpoints.forEach((cp, index) => {
+                addCheckpointMarker(cp, index + 1, false); // Not completed yet
+            });
+            
+            updateCheckpointListView(true); // 'true' for run mode
+            updateRunStatus();
+
+            // Start watching user's position
+            watchId = navigator.geolocation.watchPosition(
+                checkUserPosition,
+                (err) => showStatus("Location Error", `Could not track position: ${err.message}`, "error"),
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+
+            actionButtons.innerHTML = `
+                <button id="exitRunBtn" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg">Exit Run</button>
+            `;
+            document.getElementById('exitRunBtn').addEventListener('click', resetUI);
+        }
+
+        function checkUserPosition(position) {
+            const { latitude, longitude } = position.coords;
+            const userLatLng = L.latLng(latitude, longitude);
+            
+            // Update user marker on map
+            if (userMarker) {
+                userMarker.setLatLng(userLatLng);
+            } else {
+                 setupMap([latitude, longitude]);
+            }
+            map.panTo(userLatLng);
+
+            if (!activeCourseRun || nextCheckpointIndex >= activeCourseRun.checkpoints.length) {
+                return; // Course finished or not running
+            }
+
+            const nextCp = activeCourseRun.checkpoints[nextCheckpointIndex];
+            const distance = userLatLng.distanceTo(L.latLng(nextCp.lat, nextCp.lng));
+
+            // Update status with distance
+            updateRunStatus(distance);
+
+            if (distance <= CHECK_IN_DISTANCE_METERS) {
+                // User has reached the checkpoint!
+                markCheckpointAsCompleted(nextCheckpointIndex);
+                nextCheckpointIndex++;
+                
+                if (nextCheckpointIndex >= activeCourseRun.checkpoints.length) {
+                    // Course Complete!
+                    showStatus("Congratulations!", "You have completed the course!", "success");
+                    if (watchId) navigator.geolocation.clearWatch(watchId);
+                } else {
+                    updateRunStatus();
+                }
+            }
+        }
+
+
+        // --- UI & MAP HELPER FUNCTIONS ---
+
+        function showStatus(title, subtitle = '', type = 'info') {
+            statusPanel.classList.remove('hidden', 'bg-yellow-100', 'border-yellow-500', 'text-yellow-700', 'bg-red-100', 'border-red-500', 'text-red-700', 'bg-green-100', 'border-green-500', 'text-green-700');
+            statusText.textContent = title;
+            statusSubText.textContent = subtitle;
+
+            switch(type) {
+                case 'error':
+                    statusPanel.classList.add('bg-red-100', 'border-red-500', 'text-red-700');
+                    break;
+                case 'success':
+                    statusPanel.classList.add('bg-green-100', 'border-green-500', 'text-green-700');
+                    break;
+                default: // info
+                    statusPanel.classList.add('bg-yellow-100', 'border-yellow-500', 'text-yellow-700');
+            }
+        }
+
+        function clearAllMarkers() {
+            checkpointMarkers.forEach(m => map.removeLayer(m));
+            checkpointMarkers = [];
+        }
+
+        function addCheckpointMarker(checkpoint, number, isCompleted = false) {
+            const color = isCompleted ? '#22c55e' : '#f97316'; // green-500 or orange-500
+            const icon = L.divIcon({
+                html: `<div class="checkpoint-icon w-8 h-8 text-lg" style="background-color: ${color};">${number}</div>`,
+                className: '',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            });
+            const marker = L.marker([checkpoint.lat, checkpoint.lng], { icon }).addTo(map)
+                .bindPopup(checkpoint.name);
+            checkpointMarkers.push(marker);
+        }
+
+        function updateCheckpointListView(isRunMode = false) {
+            const checkpoints = isRunMode ? activeCourseRun.checkpoints : newCheckpoints;
+            checkpointListTitle.textContent = isRunMode ? activeCourseRun.name : "New Checkpoints";
+            checkpointList.innerHTML = '';
+            
+            if (checkpoints.length === 0) {
+                checkpointList.innerHTML = `<li class="text-gray-500 italic">No checkpoints added yet.</li>`;
+                return;
+            }
+
+            checkpoints.forEach((cp, index) => {
+                const li = document.createElement('li');
+                li.className = 'p-3 rounded-lg flex items-center justify-between';
+                
+                let statusIcon;
+                if (isRunMode) {
+                    if (index < nextCheckpointIndex) { // Completed
+                        li.className += ' bg-green-100 text-gray-500 line-through';
+                        statusIcon = `<div class="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center">✓</div>`;
+                    } else if (index === nextCheckpointIndex) { // Next
+                        li.className += ' bg-blue-100 font-bold';
+                        statusIcon = `<div class="w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center animate-pulse">▶</div>`;
+                    } else { // Upcoming
+                        li.className += ' bg-gray-100';
+                        statusIcon = `<div class="w-6 h-6 rounded-full bg-gray-400"></div>`;
+                    }
+                } else {
+                    li.className += ' bg-gray-100';
+                    statusIcon = `<div class="w-6 h-6 rounded-full bg-orange-500 text-white flex items-center justify-center font-bold">${index + 1}</div>`;
+                }
+
+                li.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        ${statusIcon}
+                        <span>${cp.name}</span>
+                    </div>
+                `;
+                checkpointList.appendChild(li);
+            });
+        }
+
+        function updateRunStatus(distance) {
+             if (nextCheckpointIndex >= activeCourseRun.checkpoints.length) {
+                showStatus("Course Complete!", `You visited all ${activeCourseRun.checkpoints.length} checkpoints.`, "success");
+                return;
+            }
+            const nextCp = activeCourseRun.checkpoints[nextCheckpointIndex];
+            let subText = `Distance to next: ${distance ? distance.toFixed(0) + ' meters' : 'Calculating...'}`;
+            showStatus(`Head to: ${nextCp.name}`, subText, "info");
+            updateCheckpointListView(true);
+        }
+
+        function markCheckpointAsCompleted(index) {
+            // Re-render the checkpoint marker with a new color
+            const marker = checkpointMarkers[index];
+            if (marker) {
+                map.removeLayer(marker);
+            }
+            addCheckpointMarker(activeCourseRun.checkpoints[index], index + 1, true);
+
+            // Update the list view
+            updateCheckpointListView(true);
+        }
+
+    </script>
+</body>
+</html>
