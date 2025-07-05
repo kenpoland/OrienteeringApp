@@ -1,2 +1,2 @@
-# OrienteeringApp
-OrienteeringApp
+# cycling-challenge-pwa
+cycling-challenge-pwa
